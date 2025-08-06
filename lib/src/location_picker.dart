@@ -4,14 +4,13 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
-import 'package:flutter_map_location_marker/flutter_map_location_marker.dart'
-    as marker;
+import 'package:flutter_map_location_marker/flutter_map_location_marker.dart' as marker;
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart' as intl;
 import 'package:latlong2/latlong.dart';
 import 'package:location/location.dart';
 
+import 'cached_tile_provider.dart';
 import 'classes.dart';
 import 'widgets/copyright_osm_widget.dart';
 import 'widgets/wide_button.dart';
@@ -261,7 +260,7 @@ class FlutterLocationPicker extends StatefulWidget {
     this.minZoomLevel = 2,
     this.maxZoomLevel = 18.4,
     this.maxBounds,
-    this.urlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    this.urlTemplate = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
     this.mapLanguage = 'en',
     this.nominatimHost = 'nominatim.openstreetmap.org',
     this.nominatimZoomLevel,
@@ -328,7 +327,9 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   LatLong initPosition = const LatLong(30.0443879, 31.2357257);
   Timer? _debounce;
   bool isLoading = true;
+  bool isSearching = false;
   late void Function(Exception e) onError;
+  late final String _userAgentId;
 
   /// It returns true if the text is RTL, false if it's LTR
   ///
@@ -390,27 +391,23 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   void _animatedMapMove(LatLng destLocation, double destZoom) {
     // Create some tweens. These serve to split up the transition from one location to another.
     // In our case, we want to split the transition be<tween> our current map center and the destination.
-    final latTween = Tween<double>(
-        begin: _mapController.camera.center.latitude,
-        end: destLocation.latitude);
-    final lngTween = Tween<double>(
-        begin: _mapController.camera.center.longitude,
-        end: destLocation.longitude);
-    final zoomTween =
-        Tween<double>(begin: _mapController.camera.zoom, end: destZoom);
+    final latTween =
+        Tween<double>(begin: _mapController.camera.center.latitude, end: destLocation.latitude);
+    final lngTween =
+        Tween<double>(begin: _mapController.camera.center.longitude, end: destLocation.longitude);
+    final zoomTween = Tween<double>(begin: _mapController.camera.zoom, end: destZoom);
     // Create a animation controller that has a duration and a TickerProvider.
     if (mounted) {
-      _animationController = AnimationController(
-          vsync: this, duration: widget.mapAnimationDuration);
+      _animationController =
+          AnimationController(vsync: this, duration: widget.mapAnimationDuration);
     }
     // The animation determines what path the animation will take. You can try different Curves values, although I found
     // fastOutSlowIn to be my favorite.
-    final Animation<double> animation = CurvedAnimation(
-        parent: _animationController, curve: Curves.fastOutSlowIn);
+    final Animation<double> animation =
+        CurvedAnimation(parent: _animationController, curve: Curves.fastOutSlowIn);
 
     _animationController.addListener(() {
-      _mapController.move(
-          LatLng(latTween.evaluate(animation), lngTween.evaluate(animation)),
+      _mapController.move(LatLng(latTween.evaluate(animation), lngTween.evaluate(animation)),
           zoomTween.evaluate(animation));
     });
 
@@ -467,9 +464,53 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     };
     queryParameters.addAll(widget.nominatimAdditionalQueryParameters ?? {});
     var uri = Uri.https(widget.nominatimHost, '/reverse', queryParameters);
-    var response = await client.get(uri);
-    var decodedResponse = jsonDecode(utf8.decode(response.bodyBytes));
+    var response = await client.get(
+      uri,
+      headers: {
+        'User-Agent': 'DengaLoveApp/1.0.$_userAgentId (Denga Location Picker; contact@denga.app)',
+        'Referer': 'https://denga.app',
+      },
+    );
     String displayName = "This Location is not accessible";
+    Map decodedResponse;
+
+    try {
+      // Check if response is successful and content is JSON
+      if (response.statusCode == 200) {
+        String responseBody = response.body; // Use response.body instead of utf8.decode
+        // Check if response starts with '{' (JSON) or '<' (HTML error)
+        if (responseBody.trim().startsWith('{') || responseBody.trim().startsWith('[')) {
+          decodedResponse = jsonDecode(responseBody);
+        } else {
+          // Response is HTML (likely blocked or error page)
+          debugPrint(
+              'Nominatim returned HTML instead of JSON: ${responseBody.substring(0, min(200, responseBody.length))}...');
+          if (responseBody.toLowerCase().contains('access blocked')) {
+            throw Exception(
+                'Access blocked by Nominatim. Please wait before making more requests.');
+          }
+          return PickedData(center, displayName, {
+            'display_name': displayName,
+            'lat': center.latitude.toString(),
+            'lon': center.longitude.toString(),
+          }, {});
+        }
+      } else {
+        debugPrint('Nominatim API error: ${response.statusCode} - ${response.reasonPhrase}');
+        return PickedData(center, displayName, {
+          'display_name': displayName,
+          'lat': center.latitude.toString(),
+          'lon': center.longitude.toString(),
+        }, {});
+      }
+    } catch (e) {
+      debugPrint('Error decoding Nominatim response: $e');
+      return PickedData(center, displayName, {
+        'display_name': displayName,
+        'lat': center.latitude.toString(),
+        'lon': center.longitude.toString(),
+      }, {});
+    }
     Map<String, dynamic> address;
 
     if (decodedResponse is Map<String, dynamic>) {
@@ -496,9 +537,11 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   @override
   void initState() {
     _mapController = MapController();
-    _animationController =
-        AnimationController(duration: widget.mapAnimationDuration, vsync: this);
+    _animationController = AnimationController(duration: widget.mapAnimationDuration, vsync: this);
     onError = widget.onError ?? (e) => debugPrint(e.toString());
+
+    // Generate unique user agent ID for this instance
+    _userAgentId = Random().nextInt(999999).toString().padLeft(6, '0');
 
     /// Checking if the trackMyPosition is true or false. If it is true, it will get the current
     /// position of the user and set the initLate and initLong to the current position. If it is false,
@@ -506,8 +549,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     /// [initPosition].longitude.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (widget.initPosition != null) {
-        initPosition = LatLong(
-            widget.initPosition!.latitude, widget.initPosition!.longitude);
+        initPosition = LatLong(widget.initPosition!.latitude, widget.initPosition!.longitude);
         onLocationChanged(latLng: initPosition);
         setState(() {
           isLoading = false;
@@ -517,8 +559,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
 
     if (widget.trackMyPosition) {
       _determinePosition().then((currentPosition) {
-        initPosition =
-            LatLong(currentPosition.latitude!, currentPosition.longitude!);
+        initPosition = LatLong(currentPosition.latitude!, currentPosition.longitude!);
 
         onLocationChanged(latLng: initPosition);
         _animatedMapMove(initPosition.toLatLng(), 18.0);
@@ -545,8 +586,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     /// triggered, it calls the setNameCurrentPos function.
     _mapController.mapEventStream.listen((event) async {
       if (event is MapEventMoveEnd) {
-        LatLong center = LatLong(
-            event.camera.center.latitude, event.camera.center.longitude);
+        LatLong center = LatLong(event.camera.center.latitude, event.camera.center.longitude);
         onLocationChanged(latLng: center);
       }
     });
@@ -564,31 +604,192 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   }
 
   Widget _buildListView() {
-    return ListView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: _options.length > 5 ? 5 : _options.length,
-      itemBuilder: (context, index) {
-        return ListTile(
-          leading: Icon(Icons.location_on, color: widget.searchBarTextColor),
-          title: Text(
-            _options[index].displayname,
-            style: TextStyle(color: widget.searchBarTextColor),
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 400),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.0, -0.3),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          )),
+          child: FadeTransition(
+            opacity: animation,
+            child: child,
           ),
-          onTap: () {
-            LatLong center =
-                LatLong(_options[index].latitude, _options[index].longitude);
-            _animatedMapMove(center.toLatLng(), 18.0);
-            onLocationChanged(
-              latLng: center,
-              address: _options[index].displayname,
-            );
-            _focusNode.unfocus();
-            _options.clear();
-            setState(() {});
-          },
         );
       },
+      child: _buildCurrentState(),
+    );
+  }
+
+  Widget _buildCurrentState() {
+    // Loading state
+    if (isSearching) {
+      return Container(
+        key: const ValueKey('loading'),
+        height: 60,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  widget.searchBarTextColor ?? const Color(0xFFEA751C),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Empty state
+    if (_options.isEmpty) {
+      return Container(
+        key: const ValueKey('empty'),
+        child: const SizedBox.shrink(),
+      );
+    }
+
+    // Results state
+    return Container(
+      key: const ValueKey('results'),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: _options.length > 5 ? 5 : _options.length,
+          itemBuilder: (context, index) {
+            return TweenAnimationBuilder<double>(
+              duration: Duration(milliseconds: 200 + (index * 80)),
+              tween: Tween(begin: 0.0, end: 1.0),
+              curve: Curves.easeOutBack,
+              builder: (context, value, child) {
+                return Transform.translate(
+                  offset: Offset(0, (1 - value) * 15),
+                  child: Transform.scale(
+                    scale: (0.8 + (value * 0.2)).clamp(0.1, 2.0),
+                    child: Opacity(
+                      opacity: value.clamp(0.0, 1.0),
+                      child: child,
+                    ),
+                  ),
+                );
+              },
+              child: Container(
+                margin: EdgeInsets.only(
+                  left: 8,
+                  right: 8,
+                  top: index == 0 ? 8 : 0,
+                  bottom: index == (_options.length > 5 ? 4 : _options.length - 1) ? 8 : 0,
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    splashColor: (widget.searchBarTextColor ?? const Color(0xFFEA751C))
+                        .withValues(alpha: 0.1),
+                    highlightColor: (widget.searchBarTextColor ?? const Color(0xFFEA751C))
+                        .withValues(alpha: 0.05),
+                    onTap: () {
+                      LatLong center = LatLong(_options[index].latitude, _options[index].longitude);
+                      _animatedMapMove(center.toLatLng(), 18.0);
+                      onLocationChanged(
+                        latLng: center,
+                        address: _options[index].displayname,
+                      );
+                      _focusNode.unfocus();
+                      _options.clear();
+                      setState(() {});
+                    },
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: (widget.searchBarTextColor ?? const Color(0xFFEA751C))
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.location_on,
+                                  color: widget.searchBarTextColor ?? const Color(0xFFEA751C),
+                                  size: 18,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  _options[index].displayname,
+                                  style: TextStyle(
+                                    color: widget.searchBarTextColor ?? Colors.black87,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Icon(
+                                Icons.arrow_forward_ios,
+                                size: 14,
+                                color: Colors.grey.withValues(alpha: 0.5),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Separator line (except for last item)
+                        if (index < (_options.length > 5 ? 4 : _options.length - 1))
+                          Container(
+                            height: 1,
+                            margin: const EdgeInsets.symmetric(horizontal: 16),
+                            color: Colors.grey.withValues(alpha: 0.1),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -607,33 +808,28 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
       child: Container(
         margin: const EdgeInsets.all(15),
         decoration: BoxDecoration(
-          color: widget.searchBarBackgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          borderRadius:
-              widget.searchbarBorderRadius ?? BorderRadius.circular(5),
+          color: widget.searchBarBackgroundColor ?? Theme.of(context).colorScheme.surface,
+          borderRadius: widget.searchbarBorderRadius ?? BorderRadius.circular(5),
         ),
         child: Column(
           children: [
             TextFormField(
-              textDirection: isRTL(_searchController.text)
-                  ? TextDirection.rtl
-                  : TextDirection.ltr,
+              textDirection: isRTL(_searchController.text) ? TextDirection.rtl : TextDirection.ltr,
               style: TextStyle(color: widget.searchBarTextColor),
               controller: _searchController,
               focusNode: _focusNode,
               decoration: InputDecoration(
                 hintText: widget.searchBarHintText,
-                hintTextDirection: isRTL(widget.searchBarHintText)
-                    ? TextDirection.rtl
-                    : TextDirection.ltr,
+                hintTextDirection:
+                    isRTL(widget.searchBarHintText) ? TextDirection.rtl : TextDirection.ltr,
                 border: widget.searchbarInputBorder ?? inputBorder,
-                focusedBorder:
-                    widget.searchbarInputFocusBorderp ?? inputFocusBorder,
+                focusedBorder: widget.searchbarInputFocusBorderp ?? inputFocusBorder,
                 hintStyle: TextStyle(color: widget.searchBarHintColor),
                 suffixIcon: IconButton(
                   onPressed: () {
                     _searchController.clear();
                     _options.clear();
+                    isSearching = false;
                     setState(() {});
                   },
                   icon: Icon(
@@ -649,24 +845,51 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
                 setState(() {});
                 _debounce = Timer(
                   widget.searchbarDebounceDuration ??
-                      const Duration(milliseconds: 500),
+                      const Duration(milliseconds: 1000), // Increased to 1s to respect OSM policy
                   () async {
+                    if (value.trim().isEmpty) {
+                      setState(() {
+                        _options.clear();
+                        isSearching = false;
+                      });
+                      return;
+                    }
+
+                    setState(() => isSearching = true);
                     var client = http.Client();
                     try {
                       String url =
                           'https://${widget.nominatimHost}/search?q=$value&format=json&polygon_geojson=1&addressdetails=1&accept-language=${widget.mapLanguage}${widget.countryFilter != null ? '&countrycodes=${widget.countryFilter}' : ''}';
-                      var response = await client.get(Uri.parse(url));
-                      var decodedResponse =
-                          jsonDecode(utf8.decode(response.bodyBytes))
-                              as List<dynamic>;
+                      var response = await client.get(
+                        Uri.parse(url),
+                        headers: {
+                          'User-Agent':
+                              'DengaLoveApp/1.0.$_userAgentId (Denga Location Picker; contact@denga.app)',
+                          'Referer': 'https://denga.app',
+                        },
+                      );
+                      // Check if response is HTML (blocked) or JSON
+                      String responseBody = response.body;
+                      if (responseBody.trim().startsWith('<html') ||
+                          responseBody.contains('Access blocked')) {
+                        throw Exception(
+                            'Access blocked by Nominatim. Please wait before making more requests.');
+                      }
+
+                      var decodedResponse = jsonDecode(responseBody) as List<dynamic>;
                       _options = decodedResponse
                           .map((e) => OSMdata(
                               displayname: e['display_name'],
                               latitude: double.parse(e['lat']),
                               longitude: double.parse(e['lon'])))
                           .toList();
-                      setState(() {});
+                      setState(() => isSearching = false);
                     } on Exception catch (e) {
+                      setState(() => isSearching = false);
+                      if (e.toString().contains('Access blocked')) {
+                        // Show user-friendly message for blocked access
+                        debugPrint('Nominatim access blocked - please wait and try again');
+                      }
                       onError(e);
                     } finally {
                       client.close();
@@ -698,8 +921,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
               shape: const CircleBorder(),
               backgroundColor: widget.zoomButtonsBackgroundColor,
               onPressed: () {
-                _animatedMapMove(_mapController.camera.center,
-                    _mapController.camera.zoom + widget.stepZoom);
+                _animatedMapMove(
+                    _mapController.camera.center, _mapController.camera.zoom + widget.stepZoom);
               },
               child: Icon(
                 Icons.zoom_in,
@@ -713,8 +936,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
               shape: const CircleBorder(),
               backgroundColor: widget.zoomButtonsBackgroundColor,
               onPressed: () {
-                _animatedMapMove(_mapController.camera.center,
-                    _mapController.camera.zoom - widget.stepZoom);
+                _animatedMapMove(
+                    _mapController.camera.center, _mapController.camera.zoom - widget.stepZoom);
               },
               child: Icon(
                 Icons.zoom_out,
@@ -732,8 +955,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
                 // });
                 _determinePosition().then(
                   (currentPosition) {
-                    LatLong center = LatLong(
-                        currentPosition.latitude!, currentPosition.longitude!);
+                    LatLong center = LatLong(currentPosition.latitude!, currentPosition.longitude!);
                     _animatedMapMove(center.toLatLng(), 18);
                     onLocationChanged(latLng: center);
                     setState(
@@ -745,8 +967,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
                   onError: (e) => onError(e),
                 );
               },
-              child:
-                  Icon(Icons.my_location, color: widget.locationButtonsColor),
+              child: Icon(Icons.my_location, color: widget.locationButtonsColor),
             ),
         ],
       ),
@@ -757,16 +978,14 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     return Positioned.fill(
       child: FlutterMap(
         options: MapOptions(
-          initialCenter:
-              widget.initPosition?.toLatLng() ?? initPosition.toLatLng(),
+          initialCenter: widget.initPosition?.toLatLng() ?? initPosition.toLatLng(),
           initialZoom: widget.initZoom,
           maxZoom: widget.maxZoomLevel,
           minZoom: widget.minZoomLevel,
           cameraConstraint: (widget.maxBounds != null
               ? CameraConstraint.contain(bounds: widget.maxBounds!)
               : const CameraConstraint.unconstrained()),
-          backgroundColor:
-              widget.mapLoadingBackgroundColor ?? const Color(0xFFE0E0E0),
+          backgroundColor: widget.mapLoadingBackgroundColor ?? const Color(0xFFF8FAFB),
           keepAlive: true,
         ),
         mapController: _mapController,
@@ -774,7 +993,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
           TileLayer(
             urlTemplate: widget.urlTemplate,
             subdomains: const ['a', 'b', 'c'],
-            tileProvider: CancellableNetworkTileProvider(),
+            tileProvider: CachedTileProvider(),
+            retinaMode: RetinaMode.isHighDensity(context),
           ),
           if (widget.showCurrentLocationPointer) _buildCurrentLocation(),
           ...widget.mapLayers,
@@ -825,8 +1045,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
               setState(() {
                 isLoading = true;
               });
-              LatLong center = LatLong(_mapController.camera.center.latitude,
-                  _mapController.camera.center.longitude);
+              LatLong center = LatLong(
+                  _mapController.camera.center.latitude, _mapController.camera.center.longitude);
               pickData(center).then((value) {
                 widget.onPicked(value);
               }, onError: (e) => onError(e)).whenComplete(

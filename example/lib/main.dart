@@ -17,29 +17,66 @@ class MyApp extends StatelessWidget {
         appBar: AppBar(
           title: const Text('Flutter Location Picker'),
         ),
-        body: FlutterLocationPicker(
-          initZoom: 11,
-          minZoomLevel: 5,
-          maxZoomLevel: 16,
-          trackMyPosition: true,
-          searchBarBackgroundColor: Colors.white,
-          selectedLocationButtonTextStyle: const TextStyle(fontSize: 18),
-          mapLanguage: 'en',
-          onError: (e) => print(e),
-          selectLocationButtonLeadingIcon: const Icon(Icons.check),
-          onPicked: (pickedData) {
-            print(pickedData.latLong.latitude);
-            print(pickedData.latLong.longitude);
-            print(pickedData.address);
-            print(pickedData.addressData);
-          },
-          onChanged: (pickedData) {
-            print(pickedData.latLong.latitude);
-            print(pickedData.latLong.longitude);
-            print(pickedData.address);
-            print(pickedData.addressData);
-          },
-          showContributorBadgeForOSM: true,
+        body: Column(
+          children: [
+            // Memory management controls
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton(
+                    onPressed: () async {
+                      final size = await CachedTileProvider.getCacheSizeFormatted();
+                      print('Cache size: $size');
+                    },
+                    child: const Text('Check Cache Size'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () async {
+                      await CachedTileProvider.clearCache();
+                      print('Cache cleared');
+                    },
+                    child: const Text('Clear Cache'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () async {
+                      await CachedTileProvider.cleanOldCache(maxAgeDays: 1);
+                      print('Old cache cleaned');
+                    },
+                    child: const Text('Clean Old Cache'),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: FlutterLocationPicker(
+                // Now uses CachedTileProvider by default for better performance and offline support
+                initZoom: 11,
+                minZoomLevel: 5,
+                maxZoomLevel: 16,
+                trackMyPosition: true,
+                searchBarBackgroundColor: Colors.white,
+                selectedLocationButtonTextStyle: const TextStyle(fontSize: 18),
+                mapLanguage: 'en',
+                onError: (e) => print(e),
+                selectLocationButtonLeadingIcon: const Icon(Icons.check),
+                onPicked: (pickedData) {
+                  print(pickedData.latLong.latitude);
+                  print(pickedData.latLong.longitude);
+                  print(pickedData.address);
+                  print(pickedData.addressData);
+                },
+                onChanged: (pickedData) {
+                  print(pickedData.latLong.latitude);
+                  print(pickedData.latLong.longitude);
+                  print(pickedData.address);
+                  print(pickedData.addressData);
+                },
+                showContributorBadgeForOSM: true,
+              ),
+            ),
+          ],
         ),
       ),
     );
