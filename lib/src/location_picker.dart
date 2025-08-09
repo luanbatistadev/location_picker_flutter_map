@@ -248,6 +248,22 @@ class FlutterLocationPicker extends StatefulWidget {
   ///  example: [PolylineLayerWidget(polyline: Polyline(points: points, color: Colors.red))]
   final List<Widget> mapLayers;
 
+  /// [maxDistance] : (double?) set the maximum distance in kilometers to show a circle around the marker (default = null)
+  ///
+  final double? maxDistance;
+
+  /// [maxDistanceCircleColor] : (Color) change the color of the max distance circle border (default = Colors.blue)
+  ///
+  final Color maxDistanceCircleColor;
+
+  /// [maxDistanceCircleFillColor] : (Color) change the fill color of the max distance circle (default = Colors.blue with 0.1 opacity)
+  ///
+  final Color maxDistanceCircleFillColor;
+
+  /// [onMaxDistanceTap] : (VoidCallback?) callback when the max distance FAB is tapped
+  ///
+  final VoidCallback? onMaxDistanceTap;
+
   const FlutterLocationPicker({
     super.key,
     required this.onPicked,
@@ -305,6 +321,10 @@ class FlutterLocationPicker extends StatefulWidget {
     this.contributorBadgeForOSMPositionRight = 0,
     this.contributorBadgeForOSMPositionBottom = -6,
     this.mapLayers = const [],
+    this.maxDistance,
+    this.maxDistanceCircleColor = Colors.blue,
+    this.maxDistanceCircleFillColor = const Color(0x1A0000FF), // Colors.blue with 0.1 opacity
+    this.onMaxDistanceTap,
     Widget? loadingWidget,
     this.selectLocationButtonLeadingIcon,
   }) : loadingWidget = loadingWidget ?? const CircularProgressIndicator();
@@ -324,7 +344,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   final Location location = Location();
   final FocusNode _focusNode = FocusNode();
   List<OSMdata> _options = <OSMdata>[];
-  LatLong initPosition = const LatLong(30.0443879, 31.2357257);
+  LatLong? initPosition;
   Timer? _debounce;
   bool isLoading = true;
   bool isSearching = false;
@@ -404,7 +424,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     // The animation determines what path the animation will take. You can try different Curves values, although I found
     // fastOutSlowIn to be my favorite.
     final Animation<double> animation =
-        CurvedAnimation(parent: _animationController, curve: Curves.fastOutSlowIn);
+        CurvedAnimation(parent: _animationController, curve: Curves.easeInOut);
 
     _animationController.addListener(() {
       _mapController.move(LatLng(latTween.evaluate(animation), lngTween.evaluate(animation)),
@@ -528,7 +548,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   }
 
   @override
-  void setState(fn) {
+  void setState(VoidCallback fn) {
     if (mounted) {
       super.setState(fn);
     }
@@ -548,7 +568,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     /// it will set the initLate and initLong to the [initPosition].latitude and
     /// [initPosition].longitude.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.initPosition != null) {
+      if (mounted && widget.initPosition != null) {
         initPosition = LatLong(widget.initPosition!.latitude, widget.initPosition!.longitude);
         onLocationChanged(latLng: initPosition);
         setState(() {
@@ -559,24 +579,30 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
 
     if (widget.trackMyPosition) {
       _determinePosition().then((currentPosition) {
-        initPosition = LatLong(currentPosition.latitude!, currentPosition.longitude!);
+        if (mounted) {
+          initPosition = LatLong(currentPosition.latitude!, currentPosition.longitude!);
 
-        onLocationChanged(latLng: initPosition);
-        _animatedMapMove(initPosition.toLatLng(), 18.0);
-        setState(
-          () {
-            isLoading = false;
-          },
-        );
+          onLocationChanged(latLng: initPosition);
+          _animatedMapMove(initPosition!.toLatLng(), 10);
+          setState(
+            () {
+              isLoading = false;
+            },
+          );
+        }
       }, onError: (e) => onError(e)).whenComplete(
-        () => setState(
-          () {
-            isLoading = false;
-          },
-        ),
+        () {
+          if (mounted) {
+            setState(
+              () {
+                isLoading = false;
+              },
+            );
+          }
+        },
       );
     } else {
-      onLocationChanged(latLng: initPosition);
+      // Don't call onLocationChanged if no initial position is set
       setState(() {
         isLoading = false;
       });
@@ -598,8 +624,17 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   /// clean up resources
   @override
   void dispose() {
+    // Cancel any ongoing operations first
+    _debounce?.cancel();
+    _debounce = null;
+
+    // Remove focus to prevent MediaQuery access issues
+    _focusNode.unfocus();
+
+    // Dispose controllers
     _mapController.dispose();
     _animationController.dispose();
+
     super.dispose();
   }
 
@@ -725,7 +760,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
                         .withValues(alpha: 0.05),
                     onTap: () {
                       LatLong center = LatLong(_options[index].latitude, _options[index].longitude);
-                      _animatedMapMove(center.toLatLng(), 18.0);
+                      _animatedMapMove(center.toLatLng(), 5);
                       onLocationChanged(
                         latLng: center,
                         address: _options[index].displayname,
@@ -910,6 +945,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   }
 
   Widget _buildControllerButtons() {
+    if (!mounted) return const SizedBox.shrink();
+
     return PositionedDirectional(
       bottom: 72,
       end: 16,
@@ -921,8 +958,10 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
               shape: const CircleBorder(),
               backgroundColor: widget.zoomButtonsBackgroundColor,
               onPressed: () {
-                _animatedMapMove(
-                    _mapController.camera.center, _mapController.camera.zoom + widget.stepZoom);
+                if (mounted) {
+                  _animatedMapMove(
+                      _mapController.camera.center, _mapController.camera.zoom + widget.stepZoom);
+                }
               },
               child: Icon(
                 Icons.zoom_in,
@@ -936,8 +975,10 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
               shape: const CircleBorder(),
               backgroundColor: widget.zoomButtonsBackgroundColor,
               onPressed: () {
-                _animatedMapMove(
-                    _mapController.camera.center, _mapController.camera.zoom - widget.stepZoom);
+                if (mounted) {
+                  _animatedMapMove(
+                      _mapController.camera.center, _mapController.camera.zoom - widget.stepZoom);
+                }
               },
               child: Icon(
                 Icons.zoom_out,
@@ -950,25 +991,49 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
               heroTag: "btn3",
               backgroundColor: widget.locationButtonBackgroundColor,
               onPressed: () async {
+                if (!mounted) return;
+
                 // setState(() {
                 //   isLoading = true;
                 // });
                 _determinePosition().then(
                   (currentPosition) {
-                    LatLong center = LatLong(currentPosition.latitude!, currentPosition.longitude!);
-                    _animatedMapMove(center.toLatLng(), 18);
-                    onLocationChanged(latLng: center);
-                    setState(
-                      () {
-                        isLoading = false;
-                      },
-                    );
+                    if (mounted) {
+                      LatLong center =
+                          LatLong(currentPosition.latitude!, currentPosition.longitude!);
+                      _animatedMapMove(center.toLatLng(), 18);
+                      onLocationChanged(latLng: center);
+                      setState(
+                        () {
+                          isLoading = false;
+                        },
+                      );
+                    }
                   },
                   onError: (e) => onError(e),
                 );
               },
               child: Icon(Icons.my_location, color: widget.locationButtonsColor),
             ),
+          if (widget.maxDistance != null) ...[
+            const SizedBox(height: 22),
+            Material(
+              color: Colors.transparent,
+              child: FloatingActionButton(
+                heroTag: "btn4",
+                backgroundColor: widget.maxDistanceCircleColor,
+                onPressed: widget.onMaxDistanceTap, // Callback when tapped
+                child: Text(
+                  '${widget.maxDistance!.round()} km',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -978,7 +1043,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     return Positioned.fill(
       child: FlutterMap(
         options: MapOptions(
-          initialCenter: widget.initPosition?.toLatLng() ?? initPosition.toLatLng(),
+          initialCenter:
+              widget.initPosition?.toLatLng() ?? initPosition?.toLatLng() ?? const LatLng(0, 0),
           initialZoom: widget.initZoom,
           maxZoom: widget.maxZoomLevel,
           minZoom: widget.minZoomLevel,
@@ -997,6 +1063,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
             retinaMode: RetinaMode.isHighDensity(context),
           ),
           if (widget.showCurrentLocationPointer) _buildCurrentLocation(),
+          if (widget.maxDistance != null) _buildMaxDistanceCircle(),
           ...widget.mapLayers,
         ],
       ),
@@ -1011,6 +1078,40 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
         markerSize: Size(18, 18),
       ),
     );
+  }
+
+  Widget _buildMaxDistanceCircle() {
+    if (widget.maxDistance == null || widget.maxDistance! <= 0) return const SizedBox.shrink();
+    if (!mounted) return const SizedBox.shrink();
+
+    try {
+      // Check if map controller is ready and widget is still mounted
+      if (_mapController.camera.center.latitude == 0 &&
+          _mapController.camera.center.longitude == 0) {
+        return const SizedBox.shrink();
+      }
+
+      final center = _mapController.camera.center;
+
+      // Convert kilometers to meters
+      final radiusInMeters = widget.maxDistance! * 1000;
+
+      return CircleLayer(
+        circles: [
+          CircleMarker(
+            point: center,
+            radius: radiusInMeters,
+            color: widget.maxDistanceCircleFillColor,
+            borderColor: widget.maxDistanceCircleColor,
+            borderStrokeWidth: 2.0,
+            useRadiusInMeter: true,
+          ),
+        ],
+      );
+    } catch (e) {
+      // Return empty widget if map controller is not ready or any other error
+      return const SizedBox.shrink();
+    }
   }
 
   Widget _buildMarker() {

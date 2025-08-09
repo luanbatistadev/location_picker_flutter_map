@@ -1,3 +1,90 @@
+## 3.3.10
+
+- **FIX**: Remove default Cairo position when trackMyPosition is false
+- **FIX**: Make initPosition nullable to prevent showing any location by default
+- **FIX**: Prevent onLocationChanged from being called when no initial position is set
+
+## 3.3.9
+
+- **FIX**: Add comprehensive mounted checks to prevent deactivated widget ancestor errors
+- **IMPROVE**: Better dispose handling with focus cleanup and timer cancellation
+
+## 3.3.8
+
+- **FIX**: Add Material widget wrapper around distance FAB to support Hero animations
+
+## 3.3.7
+
+- **NEW**: Add onMaxDistanceTap callback to handle distance FAB tap events
+
+## 3.3.6
+
+- **FIX**: Add Material widget wrapper around distance FAB to support Hero animations
+
+## 3.3.5
+
+- **REFACTOR**: Move distance indicator FAB to join other controller buttons in the same column layout
+- **IMPROVE**: Remove separate positioned widget for better code organization
+
+## 3.3.4
+
+- **FIX**: Move distance indicator FAB to left side and adjust position to avoid overlap with change location button
+
+## 3.3.3
+
+- **CHANGE**: Move distance indicator to bottom-right corner as FloatingActionButton for better UX
+
+## 3.3.2
+
+- **NEW**: Add distance indicator in top-left corner showing current max distance in kilometers
+- **IMPROVE**: Better performance by using CircleMarker instead of polygon with many points
+
+## 3.3.1
+
+- **FIX**: Replace polygon with CircleMarker using meters for perfect circular shape
+
+## 3.3.0
+
+- **IMPROVE**: Increase polygon points to 720 (2 per degree) for ultra-smooth circular shape
+
+## 3.2.9
+
+- **IMPROVE**: Increase polygon points from 64 to 360 for a perfectly smooth circular shape
+
+## 3.2.8
+
+- **FIX**: Add validation to prevent RangeError when building max distance circle with invalid values
+
+## 3.2.7
+
+- **FIX**: Handle MapController not ready exception when building max distance circle
+
+## 3.2.6
+
+- **FIX**: Make max distance circle follow camera center instead of initial position
+
+## 3.2.5
+
+- **FIX**: Correct circle shape by properly accounting for latitude-dependent longitude degrees to prevent oval distortion
+
+## 3.2.4
+
+- **FIX**: Replace CircleMarker with Polygon to create more accurate distance circles using geographic coordinates
+
+## 3.2.3
+
+- **FIX**: Correct max distance circle calculation to use pixels instead of degrees, accounting for current zoom level
+
+## 3.2.2
+
+- **FIX**: Improve accuracy of max distance circle calculation by properly accounting for latitude-dependent longitude degrees
+
+## 3.2.1
+
+- **NEW**: Add `maxDistance` property to show a circle around the marker representing the user's maximum distance preference
+- **NEW**: Add `maxDistanceCircleColor` property to customize the circle border color
+- **NEW**: Add `maxDistanceCircleFillColor` property to customize the circle fill color with transparency
+
 ## 3.2.0
 
 - **NEW**: Add `CachedTileProvider` that uses `cached_network_image` for better performance and offline support
