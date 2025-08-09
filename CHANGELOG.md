@@ -1,3 +1,14 @@
+## 3.3.12
+
+- **FIX**: Circle radius animation now animates from current value to new value instead of from 0
+- **IMPROVE**: Smoother transition between different radius values
+
+## 3.3.11
+
+- **NEW**: Add smooth animation when max distance circle radius changes
+- **IMPROVE**: Circle radius animates from 0 to target value with easeInOut curve
+- **IMPROVE**: Animation duration set to 800ms for smooth visual feedback
+
 ## 3.3.10
 
 - **FIX**: Remove default Cairo position when trackMyPosition is false

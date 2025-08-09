@@ -340,6 +340,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
 
   // Create a animation controller that has a duration and a TickerProvider.
   late AnimationController _animationController;
+  late AnimationController _radiusAnimationController;
   final TextEditingController _searchController = TextEditingController();
   final Location location = Location();
   final FocusNode _focusNode = FocusNode();
@@ -350,6 +351,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   bool isSearching = false;
   late void Function(Exception e) onError;
   late final String _userAgentId;
+  double _previousRadius = 0.0;
+  double _currentRadius = 0.0;
 
   /// It returns true if the text is RTL, false if it's LTR
   ///
@@ -558,6 +561,10 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   void initState() {
     _mapController = MapController();
     _animationController = AnimationController(duration: widget.mapAnimationDuration, vsync: this);
+    _radiusAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    );
     onError = widget.onError ?? (e) => debugPrint(e.toString());
 
     // Generate unique user agent ID for this instance
@@ -634,6 +641,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     // Dispose controllers
     _mapController.dispose();
     _animationController.dispose();
+    _radiusAnimationController.dispose();
 
     super.dispose();
   }
@@ -1001,7 +1009,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
                     if (mounted) {
                       LatLong center =
                           LatLong(currentPosition.latitude!, currentPosition.longitude!);
-                      _animatedMapMove(center.toLatLng(), 18);
+                      _animatedMapMove(center.toLatLng(), 5);
                       onLocationChanged(latLng: center);
                       setState(
                         () {
@@ -1096,17 +1104,37 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
       // Convert kilometers to meters
       final radiusInMeters = widget.maxDistance! * 1000;
 
-      return CircleLayer(
-        circles: [
-          CircleMarker(
-            point: center,
-            radius: radiusInMeters,
-            color: widget.maxDistanceCircleFillColor,
-            borderColor: widget.maxDistanceCircleColor,
-            borderStrokeWidth: 2.0,
-            useRadiusInMeter: true,
-          ),
-        ],
+      // Start animation if radius changed
+      if (_previousRadius != radiusInMeters) {
+        _currentRadius = _previousRadius; // Store current radius as start point
+        _previousRadius = radiusInMeters;
+        if (mounted) {
+          _radiusAnimationController.forward(from: 0.0);
+        }
+      }
+
+      return AnimatedBuilder(
+        animation: _radiusAnimationController,
+        builder: (context, child) {
+          // Create a smooth animation curve
+          final curvedValue = Curves.easeInOut.transform(_radiusAnimationController.value);
+
+          // Animate the radius from current value to the target value
+          final animatedRadius = _currentRadius + (radiusInMeters - _currentRadius) * curvedValue;
+
+          return CircleLayer(
+            circles: [
+              CircleMarker(
+                point: center,
+                radius: animatedRadius,
+                color: widget.maxDistanceCircleFillColor,
+                borderColor: widget.maxDistanceCircleColor,
+                borderStrokeWidth: 2.0,
+                useRadiusInMeter: true,
+              ),
+            ],
+          );
+        },
       );
     } catch (e) {
       // Return empty widget if map controller is not ready or any other error
