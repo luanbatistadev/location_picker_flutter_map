@@ -1,10 +1,9 @@
-import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -13,105 +12,41 @@ class CachedTileProvider extends TileProvider {
   CachedTileProvider({
     this.maxHeight = 256,
     this.maxWidth = 256,
-    this.httpHeaders,
     this.cacheKey,
-    this.maxCacheSize = 100,
-    this.maxCacheAge = const Duration(days: 30),
-    this.enableMemoryCache = true,
-    this.enableDiskCache = true,
+    super.headers,
   });
+
+  static const cacheDirectoryName = 'tile_cache';
+  static const maxCachedTiles = 1000;
+  static const cacheStalePeriod = Duration(days: 30);
+
+  /// Tiles are cached apart from the default image cache so that map panning
+  /// cannot evict the images the rest of the app is showing
+  static final cacheManager = _TileCacheManager();
 
   final int? maxHeight;
   final int? maxWidth;
-  final Map<String, String>? httpHeaders;
   final String? cacheKey;
-  final int maxCacheSize;
-  final Duration maxCacheAge;
-  final bool enableMemoryCache;
-  final bool enableDiskCache;
 
   @override
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
-    final url = options.urlTemplate!
-        .replaceAll('{x}', coordinates.x.toString())
-        .replaceAll('{y}', coordinates.y.toString())
-        .replaceAll('{z}', coordinates.z.toString());
-
-    if (options.subdomains.isNotEmpty) {
-      final subdomain = options.subdomains[coordinates.x % options.subdomains.length];
-      final subdomainIndex = url.indexOf('{s}');
-      if (subdomainIndex != -1) {
-        final urlWithSubdomain = url.replaceRange(subdomainIndex, subdomainIndex + 3, subdomain);
-        return _createCachedImageProvider(urlWithSubdomain);
-      }
-    }
-
-    return _createCachedImageProvider(url);
-  }
-
-  CachedNetworkImageProvider _createCachedImageProvider(String url) {
     return CachedNetworkImageProvider(
-      url,
+      getTileUrl(coordinates, options),
       maxHeight: maxHeight,
       maxWidth: maxWidth,
-      headers: httpHeaders,
+      headers: headers,
       cacheKey: cacheKey,
+      cacheManager: cacheManager,
     );
-  }
-
-  /// Get the cache age in days for this provider
-  int get cacheAgeInDays => maxCacheAge.inDays;
-
-  Future<ui.Image> getImageFromProvider(
-    ImageProvider provider,
-    TileCoordinates coordinates,
-    TileLayer options,
-  ) async {
-    try {
-      final Completer<ui.Image> completer = Completer<ui.Image>();
-      final ImageStream stream = provider.resolve(ImageConfiguration.empty);
-      final ImageStreamListener listener = ImageStreamListener(
-        (ImageInfo info, bool synchronousCall) {
-          completer.complete(info.image);
-        },
-        onError: (dynamic exception, StackTrace? stackTrace) {
-          completer.completeError(exception, stackTrace);
-        },
-      );
-      stream.addListener(listener);
-      return await completer.future;
-    } catch (e) {
-      // Fallback to a blank image if loading fails
-      return await _createBlankImage();
-    }
-  }
-
-  Future<ui.Image> _createBlankImage() async {
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final paint = Paint()..color = const Color(0xFFF0F0F0);
-    canvas.drawRect(
-      const Rect.fromLTWH(0, 0, 256, 256),
-      paint,
-    );
-    final picture = recorder.endRecording();
-    return await picture.toImage(256, 256);
   }
 
   /// Clear all cached tiles from memory and disk
   static Future<void> clearCache() async {
-    // Clear memory cache
     PaintingBinding.instance.imageCache.clear();
     PaintingBinding.instance.imageCache.clearLiveImages();
 
-    // Clear disk cache
     try {
-      final cacheDir = await getTemporaryDirectory();
-      final tileCacheDir = Directory('${cacheDir.path}/tile_cache');
-
-      if (await tileCacheDir.exists()) {
-        await tileCacheDir.delete(recursive: true);
-      }
+      await cacheManager.emptyCache();
     } catch (e) {
       if (kDebugMode) {
         print('Error clearing cache: $e');
@@ -123,7 +58,7 @@ class CachedTileProvider extends TileProvider {
   static Future<int> getCacheSize() async {
     try {
       final cacheDir = await getTemporaryDirectory();
-      final tileCacheDir = Directory('${cacheDir.path}/tile_cache');
+      final tileCacheDir = Directory('${cacheDir.path}/$cacheDirectoryName');
 
       if (await tileCacheDir.exists()) {
         int totalSize = 0;
@@ -161,34 +96,6 @@ class CachedTileProvider extends TileProvider {
     }
   }
 
-  /// Clean old cache files (older than specified days)
-  /// If a provider instance is provided, uses its maxCacheAge
-  static Future<void> cleanOldCache({int? maxAgeDays, CachedTileProvider? provider}) async {
-    final days = maxAgeDays ?? provider?.cacheAgeInDays ?? 7;
-    try {
-      final cacheDir = await getTemporaryDirectory();
-      final tileCacheDir = Directory('${cacheDir.path}/tile_cache');
-
-      if (await tileCacheDir.exists()) {
-        final files = tileCacheDir.listSync();
-        final now = DateTime.now();
-
-        for (final file in files) {
-          if (file is File) {
-            final stat = await file.stat();
-            if (now.difference(stat.modified).inDays > days) {
-              await file.delete();
-            }
-          }
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error cleaning old cache: $e');
-      }
-    }
-  }
-
   /// Set memory cache size limit
   static void setMemoryCacheSize(int size) {
     PaintingBinding.instance.imageCache.maximumSize = size;
@@ -203,4 +110,15 @@ class CachedTileProvider extends TileProvider {
   static int getMemoryCacheSizeLimit() {
     return PaintingBinding.instance.imageCache.maximumSize;
   }
+}
+
+class _TileCacheManager extends CacheManager with ImageCacheManager {
+  _TileCacheManager()
+      : super(
+          Config(
+            CachedTileProvider.cacheDirectoryName,
+            stalePeriod: CachedTileProvider.cacheStalePeriod,
+            maxNrOfCacheObjects: CachedTileProvider.maxCachedTiles,
+          ),
+        );
 }

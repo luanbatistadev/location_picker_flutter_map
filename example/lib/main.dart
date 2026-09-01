@@ -39,13 +39,6 @@ class MyApp extends StatelessWidget {
                     },
                     child: const Text('Clear Cache'),
                   ),
-                  ElevatedButton(
-                    onPressed: () async {
-                      await CachedTileProvider.cleanOldCache(maxAgeDays: 1);
-                      print('Old cache cleaned');
-                    },
-                    child: const Text('Clean Old Cache'),
-                  ),
                 ],
               ),
             ),

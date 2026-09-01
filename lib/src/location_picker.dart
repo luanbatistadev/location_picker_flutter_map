@@ -276,7 +276,7 @@ class FlutterLocationPicker extends StatefulWidget {
     this.minZoomLevel = 2,
     this.maxZoomLevel = 18.4,
     this.maxBounds,
-    this.urlTemplate = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    this.urlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     this.mapLanguage = 'en',
     this.nominatimHost = 'nominatim.openstreetmap.org',
     this.nominatimZoomLevel,
@@ -534,20 +534,21 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
         'lon': center.longitude.toString(),
       }, {});
     }
-    Map<String, dynamic> address;
-
-    if (decodedResponse is Map<String, dynamic>) {
-      if (decodedResponse['display_name'] != null) {
-        displayName = decodedResponse['display_name'];
-        address = decodedResponse['address'];
-      } else {
-        center = const LatLong(0, 0);
-        address = decodedResponse;
-      }
-      return PickedData(center, displayName, address, decodedResponse);
-    } else {
-      return PickedData(const LatLong(0, 0), displayName, {}, decodedResponse);
+    if (decodedResponse is! Map<String, dynamic>) {
+      return PickedData(center, displayName, {}, decodedResponse);
     }
+
+    if (decodedResponse['display_name'] != null) {
+      displayName = decodedResponse['display_name'];
+    }
+    final address = decodedResponse['address'];
+
+    return PickedData(
+      center,
+      displayName,
+      address is Map<String, dynamic> ? address : {},
+      decodedResponse,
+    );
   }
 
   @override
@@ -587,7 +588,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
     if (widget.trackMyPosition) {
       _determinePosition().then((currentPosition) {
         if (mounted) {
-          initPosition = LatLong(currentPosition.latitude!, currentPosition.longitude!);
+          initPosition = LatLong(currentPosition.latitude, currentPosition.longitude);
 
           onLocationChanged(latLng: initPosition);
           _animatedMapMove(initPosition!.toLatLng(), 10);
@@ -1008,7 +1009,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
                   (currentPosition) {
                     if (mounted) {
                       LatLong center =
-                          LatLong(currentPosition.latitude!, currentPosition.longitude!);
+                          LatLong(currentPosition.latitude, currentPosition.longitude);
                       _animatedMapMove(center.toLatLng(), 5);
                       onLocationChanged(latLng: center);
                       setState(
@@ -1067,8 +1068,9 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
           TileLayer(
             urlTemplate: widget.urlTemplate,
             subdomains: const ['a', 'b', 'c'],
+            userAgentPackageName: 'com.denga',
             tileProvider: CachedTileProvider(),
-            retinaMode: RetinaMode.isHighDensity(context),
+            retinaMode: widget.urlTemplate.contains('{r}') && RetinaMode.isHighDensity(context),
           ),
           if (widget.showCurrentLocationPointer) _buildCurrentLocation(),
           if (widget.maxDistance != null) _buildMaxDistanceCircle(),
@@ -1079,8 +1081,8 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   }
 
   Widget _buildCurrentLocation() {
-    return marker.CurrentLocationLayer(
-      style: const marker.LocationMarkerStyle(
+    return const marker.CurrentLocationLayer(
+      style: marker.LocationMarkerStyle(
         markerDirection: marker.MarkerDirection.heading,
         headingSectorRadius: 60,
         markerSize: Size(18, 18),

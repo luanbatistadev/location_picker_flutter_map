@@ -1,3 +1,25 @@
+## 3.5.0
+
+- **FIX**: Default `urlTemplate` moved from CARTO basemaps (which now requires an API key and stamps "API KEY REQUIRED" over every tile) to OpenStreetMap `https://tile.openstreetmap.org/{z}/{x}/{y}.png`
+- **FIX**: `CachedTileProvider` now builds tile URLs through `TileProvider.getTileUrl`, so `{r}`, `{d}`, `tms` and `zoomOffset` are resolved instead of being sent literally
+- **FIX**: `CachedTileProvider` now forwards `TileProvider.headers` (including the `User-Agent` injected by `TileLayer.userAgentPackageName`) to tile requests, as required by the OSM tile usage policy
+- **IMPROVE**: Retina mode is only enabled for templates that support server-side `@2x` tiles, avoiding the 4x request amplification of simulated retina on OSM
+- **FIX**: Tiles now cache in their own `tile_cache` bucket instead of `DefaultCacheManager`, which they shared with every other `CachedNetworkImage` in the host app under a single 200-object cap
+- **FIX**: `maxCacheSize` / `maxCacheAge` / `enableMemoryCache` / `enableDiskCache` were never forwarded to the image provider, so the real limits were `DefaultCacheManager`'s 200 objects; removed the dead parameters and raised the tile cap to 1000. The tile manager mixes in `ImageCacheManager`, which `cached_network_image` asserts on whenever `maxWidth`/`maxHeight` are set
+- **FIX**: `getCacheSize` and `clearCache` inspected a `tile_cache` directory nothing ever wrote to, always reporting 0 bytes; `clearCache` now empties the cache through the manager so its journal stays consistent
+- **BREAKING**: Removed `CachedTileProvider.cleanOldCache` and `cacheAgeInDays` — the cache manager evicts by `stalePeriod` and `maxNrOfCacheObjects` on its own, and deleting files behind it desynced the journal
+- **FIX**: `pickData` no longer replaces the coordinates the user picked with `(0, 0)` when the reverse geocode comes back without a `display_name`, which silently moved the caller's location to the Gulf of Guinea
+- **FIX**: `addressData` is now only populated from a real `address` object; the previous unchecked `dynamic` assignment threw a `TypeError` when Nominatim answered without that key
+- **CHORE**: Dropped unused `flutter_map_cancellable_tile_provider` dependency, bumped `intl` to `^0.20.2` (matches upstream, unblocks `flutter_localizations`)
+
+### Dependency updates
+
+- **BREAKING**: `flutter_map` `^7.0.1` -> `^8.1.0`, required by `flutter_map_location_marker` v10. Consumers must migrate too
+- **BREAKING**: `flutter_map_location_marker` `^9.0.0` -> `^10.3.0`. It now uses `geolocator ^14.0.0` internally, so consuming apps pinned to `geolocator ^13` will fail to resolve until they bump
+- **BREAKING**: `location` `^7.0.0` -> `^10.0.2`. `LocationData.latitude`/`longitude` are no longer nullable
+- **BREAKING**: Minimum Dart SDK `^3.4.0` -> `^3.12.1`, required by `flutter_map_location_marker` v10
+- `latlong2` stays on `^0.9.0`: `flutter_map_location_marker` v10 pins `latlong2 ^0.9.1`, so `0.10.x` cannot be resolved even though `flutter_map` 8.3.1 added support for it
+
 ## 3.3.12
 
 - **FIX**: Circle radius animation now animates from current value to new value instead of from 0
